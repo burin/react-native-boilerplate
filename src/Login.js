@@ -1,7 +1,14 @@
 import Expo from 'expo'
 import React from 'react'
-import { StyleSheet, Text, View, Button, Linking } from 'react-native'
-import jwtDecoder from 'jwt-decode'
+import {
+  StyleSheet,
+  Text,
+  View,
+  Button,
+  Linking,
+  AsyncStorage
+} from 'react-native'
+import { gql, graphql, compose } from 'react-apollo'
 import {
   EXPO_LOCAL_TUNNEL_URI,
   AUTH0_DOMAIN,
@@ -19,12 +26,34 @@ if (Expo.Constants.manifest.xde) {
   redirectUri = `${Expo.Constants.linkingUri}/redirect`
 }
 
-export default class Login extends React.Component {
-  state = {
-    username: undefined
-  }
+const queryUser = gql`
+  query {
+    user {
+      id
+    }
+  }`
+
+const createUserMutation = gql`
+  mutation createUser($idToken: String!) {
+    createUser(
+      authProvider: {
+        auth0: {
+          idToken: $idToken
+        }
+      }
+    ){  
+      id
+    }
+  }`
+
+class Login extends React.Component {
   componentDidMount () {
     Linking.addEventListener('url', this._handleAuth0Redirect)
+  }
+
+  _logout = async () => {
+    AsyncStorage.removeItem('token')
+    this.props.queryUser.refetch()
   }
 
   _loginWithAuth0 = async () => {
@@ -35,20 +64,6 @@ export default class Login extends React.Component {
         response_type: 'token',
         scope: 'openid name',
         redirect_uri: redirectUri,
-        state: redirectUri
-      })
-    Expo.WebBrowser.openBrowserAsync(redirectionURL)
-  }
-
-  _loginWithAuth0Twitter = async () => {
-    const redirectionURL =
-      `${AUTH0_DOMAIN}/authorize` +
-      this._toQueryString({
-        client_id: AUTH0_CLIENT_ID,
-        response_type: 'token',
-        scope: 'openid name',
-        redirect_uri: redirectUri,
-        connection: 'twitter',
         state: redirectUri
       })
     Expo.WebBrowser.openBrowserAsync(redirectionURL)
@@ -66,11 +81,18 @@ export default class Login extends React.Component {
       return map
     }, {})
     const encodedToken = responseObj.id_token
-    const decodedToken = jwtDecoder(encodedToken)
-    console.log(encodedToken)
-    const username = decodedToken.name
-    console.log(decodedToken)
-    this.setState({ username })
+    AsyncStorage.setItem('token', encodedToken)
+    try {
+      await this.props.createUser({
+        variables: {
+          idToken: encodedToken
+        }
+      })
+    } catch (e) {
+      // user exists
+    }
+
+    this.props.queryUser.refetch()
   }
 
   /**
@@ -91,16 +113,16 @@ export default class Login extends React.Component {
   render () {
     return (
       <View style={styles.container}>
-        {this.state.username !== undefined
-          ? <Text style={styles.title}>Hi {this.state.username}!</Text>
+        {this.props.queryUser.user
+          ? <View>
+            <Text style={styles.title}>
+                Current user id: {this.props.queryUser.user.id}
+            </Text>
+            <Button title='Logout' onPress={this._logout} />
+          </View>
           : <View>
             <Text style={styles.title}>Example: Auth0 login</Text>
             <Button title='Login with Auth0' onPress={this._loginWithAuth0} />
-            <Text style={styles.title}>Example: Auth0 force Twitter</Text>
-            <Button
-              title='Login with Auth0-Twitter'
-              onPress={this._loginWithAuth0Twitter}
-              />
           </View>}
       </View>
     )
@@ -120,3 +142,8 @@ const styles = StyleSheet.create({
     marginTop: 40
   }
 })
+
+export default compose(
+  graphql(createUserMutation, { name: 'createUser' }),
+  graphql(queryUser, { name: 'queryUser' })
+)(Login)
